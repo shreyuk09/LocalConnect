@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Platform Analytics · Admin{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+:root{--an-bg:#eef2f9;--an-panel:rgba(255,255,255,.72);--an-border:rgba(255,255,255,.6);
+  --an-ink:#0f172a;--an-muted:#64748b;--an-shadow:0 10px 30px rgba(2,6,23,.10);--an-grid:#e6ebf4;}
+body.an-dark{--an-bg:#070b16;--an-panel:rgba(23,30,48,.66);--an-border:rgba(148,163,184,.16);
+  --an-ink:#e6ecf7;--an-muted:#93a4c2;--an-shadow:0 14px 40px rgba(0,0,0,.5);--an-grid:#22304d;}
+.an-wrap{background:radial-gradient(900px 500px at 12% -8%,rgba(37,99,235,.20),transparent 55%),
+  radial-gradient(900px 500px at 95% 0%,rgba(20,184,166,.18),transparent 55%),var(--an-bg);
+  margin:-1rem -9999px 0;padding:1.4rem 9999px 4rem;color:var(--an-ink);transition:.4s;}
+.an-wrap h2,.an-wrap h5,.an-wrap h6{color:var(--an-ink);}
+.glass{background:var(--an-panel);backdrop-filter:blur(14px);border:1px solid var(--an-border);
+  border-radius:20px;box-shadow:var(--an-shadow);padding:18px;height:100%;transition:.18s;}
+.glass:hover{transform:translateY(-4px);}
+.kpi .label{color:var(--an-muted);font-size:.8rem;font-weight:600;text-transform:uppercase;}
+.kpi .value{font-size:2rem;font-weight:800;}
+.ico{width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:1.3rem;color:#fff;}
+.g-blue{background:linear-gradient(135deg,#2563eb,#3b82f6);}.g-teal{background:linear-gradient(135deg,#14b8a6,#0ea5a4);}
+.g-amber{background:linear-gradient(135deg,#f59e0b,#f97316);}.g-pink{background:linear-gradient(135deg,#ec4899,#8b5cf6);}
+.g-green{background:linear-gradient(135deg,#16a34a,#22c55e);}
+.an-muted{color:var(--an-muted);}.an-table{width:100%;font-size:.9rem;}
+.an-table th{color:var(--an-muted);text-align:left;padding:6px 8px;}.an-table td{padding:6px 8px;border-top:1px solid var(--an-grid);}
+.chartbox{position:relative;height:280px;}#geoMap{height:320px;border-radius:14px;}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="an-wrap">
+  <div class="d-flex justify-content-between align-items-center mb-3">
+    <div><h2 class="mb-0"><i class="bi bi-globe2"></i> Platform Analytics</h2>
+      <span class="an-muted">Admin business intelligence · all shops</span></div>
+    <button class="btn btn-outline-secondary btn-sm" id="themeBtn"><i class="bi bi-moon-stars"></i> Theme</button>
+  </div>
+
+  {% set st = d.stats %}
+  <div class="row g-3 mb-4">
+    <div class="col-6 col-md"><div class="glass kpi"><div class="d-flex justify-content-between"><span class="label">Shops</span><span class="ico g-blue"><i class="bi bi-shop"></i></span></div><div class="value">{{ st.shops }}</div></div></div>
+    <div class="col-6 col-md"><div class="glass kpi"><div class="d-flex justify-content-between"><span class="label">Customers</span><span class="ico g-teal"><i class="bi bi-people"></i></span></div><div class="value">{{ st.customers }}</div></div></div>
+    <div class="col-6 col-md"><div class="glass kpi"><div class="d-flex justify-content-between"><span class="label">Orders</span><span class="ico g-amber"><i class="bi bi-bag"></i></span></div><div class="value">{{ st.orders }}</div></div></div>
+    <div class="col-6 col-md"><div class="glass kpi"><div class="d-flex justify-content-between"><span class="label">Platform Revenue</span><span class="ico g-green"><i class="bi bi-cash-stack"></i></span></div><div class="value">₹{{ st.revenue|int }}</div></div></div>
+    <div class="col-6 col-md"><div class="glass kpi"><div class="d-flex justify-content-between"><span class="label">Completed</span><span class="ico g-pink"><i class="bi bi-check2-circle"></i></span></div><div class="value">{{ st.completed }}</div></div></div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-lg-7"><div class="glass"><h6>📈 Platform Revenue Trend (30 days)</h6><div class="chartbox"><canvas id="revLine"></canvas></div></div></div>
+    <div class="col-lg-5"><div class="glass"><h6>🥧 Category Sales Distribution</h6><div class="chartbox"><canvas id="catPie"></canvas></div></div></div>
+  </div>
+
+  <div class="row g-3 mb-4">
+    <div class="col-lg-7"><div class="glass"><h6>🗺️ Geographic Sales Distribution</h6><div id="geoMap" class="mb-2"></div>
+      <div class="chartbox" style="height:200px"><canvas id="geoBar"></canvas></div></div></div>
+    <div class="col-lg-5">
+      <div class="glass mb-3"><h6>🏬 Most Popular Shops</h6>
+        <table class="an-table"><tr><th>Shop</th><th>Revenue</th><th>⭐</th></tr>
+        {% for s in d.popular_shops %}<tr><td>{{ s.name }}</td><td>₹{{ s.revenue|int }}</td><td>{{ s.rating }}</td></tr>{% endfor %}</table>
+      </div>
+      <div class="glass"><h6>🔥 Most Popular Products</h6>
+        <table class="an-table"><tr><th>Product</th><th>Units</th></tr>
+        {% for p in d.popular_products %}<tr><td>{{ p.name }}</td><td><strong>{{ p.sold }}</strong></td></tr>{% endfor %}</table>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
+{% block scripts %}
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+const D = {{ d | tojson }};
+const PALETTE=['#2563eb','#14b8a6','#f59e0b','#ec4899','#8b5cf6','#22c55e','#ef4444','#0ea5e9','#f97316','#64748b'];
+
+new Chart(revLine,{type:'line',data:{labels:D.revenue_trend.labels,
+  datasets:[{label:'₹',data:D.revenue_trend.data,borderColor:'#2563eb',tension:.35,fill:true,
+    backgroundColor:'rgba(37,99,235,.18)',pointRadius:0}]},
+  options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+
+new Chart(catPie,{type:'pie',data:{labels:D.category.labels,datasets:[{data:D.category.data,backgroundColor:PALETTE}]},
+  options:{responsive:true,maintainAspectRatio:false}});
+
+new Chart(geoBar,{type:'bar',data:{labels:D.geo.labels,datasets:[{label:'Revenue ₹',data:D.geo.data,backgroundColor:'#14b8a6',borderRadius:5}]},
+  options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+
+// geo map — markers sized by revenue
+const map=L.map('geoMap').setView([12.9716,77.5946],11);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{attribution:'© OpenStreetMap'}).addTo(map);
+const maxRev=Math.max(1,...D.shop_markers.map(m=>m.revenue));
+D.shop_markers.forEach(m=>{L.circleMarker([m.lat,m.lng],{radius:6+18*(m.revenue/maxRev),
+  color:'#2563eb',fillColor:'#14b8a6',fillOpacity:.6}).addTo(map)
+  .bindPopup('<b>'+m.name+'</b><br>₹'+Math.round(m.revenue).toLocaleString());});
+
+const tb=document.getElementById('themeBtn');
+function applyTheme(){const dark=localStorage.an_dark==='1';document.body.classList.toggle('an-dark',dark);
+  Chart.defaults.color=dark?'#cbd5e1':'#475569';for(const id in Chart.instances)Chart.instances[id].update();}
+tb.onclick=()=>{localStorage.an_dark=localStorage.an_dark==='1'?'0':'1';applyTheme();};applyTheme();
+</script>
+{% endblock %}

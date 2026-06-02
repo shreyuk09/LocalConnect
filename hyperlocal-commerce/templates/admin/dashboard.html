@@ -1,0 +1,77 @@
+{% extends "base.html" %}
+{% block title %}Admin — localConnect{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <h3 class="section-title mb-0"><i class="bi bi-shield-check text-primary"></i> Admin Console</h3>
+  <a class="btn btn-primary" href="{{ url_for('admin_analytics') }}"><i class="bi bi-graph-up-arrow"></i> Platform Analytics</a>
+</div>
+
+<div class="row g-3 mb-4">
+  <div class="col-md-3"><div class="card stat-card p-3 text-center"><div class="num text-primary">{{ stats.users }}</div><small class="text-muted">Users</small></div></div>
+  <div class="col-md-2"><div class="card stat-card p-3 text-center"><div class="num" style="color:var(--brand-2)">{{ stats.shops }}</div><small class="text-muted">Shops</small></div></div>
+  <div class="col-md-2"><div class="card stat-card p-3 text-center"><div class="num text-warning">{{ stats.pending_shops }}</div><small class="text-muted">Pending</small></div></div>
+  <div class="col-md-2"><div class="card stat-card p-3 text-center"><div class="num text-success">{{ stats.orders }}</div><small class="text-muted">Orders</small></div></div>
+  <div class="col-md-3"><div class="card stat-card p-3 text-center"><div class="num text-success">₹{{ stats.revenue|int }}</div><small class="text-muted">GMV</small></div></div>
+</div>
+
+<ul class="nav nav-tabs">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#shops">Shops</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#users">Users</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#orders">Orders</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#products">Products</button></li>
+</ul>
+
+<div class="tab-content card border-top-0 p-3">
+  <div class="tab-pane fade show active" id="shops">
+    <table class="table table-sm align-middle table-sticky">
+      <thead><tr><th>Shop</th><th>Category</th><th>Owner</th><th>Rating</th><th>Verified</th><th></th></tr></thead>
+      <tbody>
+      {% for s in shops %}
+      <tr>
+        <td>{{ s.name }}</td><td>{{ s.category }}</td><td>{{ s.owner_name }}</td><td>⭐{{ s.rating }}</td>
+        <td>{% if s.verified %}<span class="chip green">Verified</span>{% else %}<span class="chip amber">Pending</span>{% endif %}</td>
+        <td><form method="post" action="{{ url_for('verify_shop', shop_id=s.id) }}">
+          <button class="btn btn-sm btn-outline-primary">{{ 'Unverify' if s.verified else 'Verify' }}</button></form></td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tab-pane fade" id="users">
+    <table class="table table-sm align-middle">
+      <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Phone</th><th></th></tr></thead>
+      <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.name }}</td><td>{{ u.email }}</td>
+        <td><span class="badge text-bg-{{ 'danger' if u.role=='admin' else 'primary' if u.role=='owner' else 'secondary' }}">{{ u.role }}</span></td>
+        <td>{{ u.phone }}</td>
+        <td>{% if u.role != 'admin' %}<form method="post" action="{{ url_for('delete_user', user_id=u.id) }}">
+          <button class="btn btn-sm btn-outline-danger">Remove</button></form>{% endif %}</td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tab-pane fade" id="orders">
+    <table class="table table-sm align-middle">
+      <thead><tr><th>#</th><th>Customer</th><th>Shop</th><th>Type</th><th>Total</th><th>Status</th></tr></thead>
+      <tbody>
+      {% for o in orders %}
+      <tr><td>{{ o.id }}</td><td>{{ o.customer.name if o.customer }}</td><td>{{ o.shop.name }}</td>
+          <td>{{ o.order_type }}</td><td>₹{{ o.total|int }}</td>
+          <td><span class="badge text-bg-secondary">{{ o.status }}</span></td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tab-pane fade" id="products">
+    <div class="d-flex flex-wrap gap-2">
+      {% for p in products %}<span class="chip">{{ p.name }} <small class="text-muted">· {{ p.category }}</small></span>{% endfor %}
+    </div>
+  </div>
+</div>
+{% endblock %}

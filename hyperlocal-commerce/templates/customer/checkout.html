@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}Checkout — localConnect{% endblock %}
+{% block content %}
+<h3 class="section-title mb-3"><i class="bi bi-bag-check text-primary"></i> Checkout</h3>
+<div class="row g-4">
+  <div class="col-lg-5">
+    <div class="card p-3">
+      <img src="{{ inv.product.image }}" class="rounded mb-2" alt="">
+      <h5>{{ inv.product.name }}</h5>
+      <div class="text-muted">at <strong>{{ inv.shop.name }}</strong></div>
+      <div class="price-tag my-1">₹{{ inv.price|int }}</div>
+      <div class="d-flex flex-wrap gap-2 small">
+        <span class="chip"><i class="bi bi-box"></i> {{ inv.stock }} in stock</span>
+        <span class="chip"><i class="bi bi-signpost"></i> {{ distance }}</span>
+        <span class="chip"><i class="bi bi-person-walking"></i> {{ walk_time }} min walk</span>
+        {% if inv.shop.delivery_available %}<span class="chip green"><i class="bi bi-truck"></i> {{ delivery_time }} min delivery</span>{% endif %}
+      </div>
+      <div class="small text-muted mt-2"><i class="bi bi-geo-alt"></i> {{ inv.shop.address }}</div>
+    </div>
+  </div>
+
+  <div class="col-lg-7">
+    <form method="post" class="card p-3">
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Quantity</label>
+        <input class="form-control" type="number" name="qty" value="1" min="1" max="{{ inv.stock }}" required>
+      </div>
+
+      <label class="form-label fw-semibold">Fulfilment</label>
+      <div class="row g-2 mb-3">
+        <div class="col-md-6">
+          <input class="btn-check" type="radio" name="order_type" id="reserve" value="reserve" checked>
+          <label class="btn btn-outline-primary w-100 text-start" for="reserve">
+            <i class="bi bi-shop"></i> <strong>Reserve & Collect</strong><br>
+            <small>Pick up in {{ walk_time }} min at the store</small></label>
+        </div>
+        <div class="col-md-6">
+          <input class="btn-check" type="radio" name="order_type" id="delivery" value="delivery"
+                 {{ 'disabled' if not inv.shop.delivery_available }}>
+          <label class="btn btn-outline-success w-100 text-start" for="delivery">
+            <i class="bi bi-truck"></i> <strong>Home Delivery</strong><br>
+            <small>{% if inv.shop.delivery_available %}Arrives in ~{{ delivery_time }} min{% else %}Not available at this shop{% endif %}</small></label>
+        </div>
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label fw-semibold">Delivery address (for delivery orders)</label>
+        <textarea class="form-control" name="address" rows="2" placeholder="House / street / landmark"></textarea>
+      </div>
+
+      <label class="form-label fw-semibold">Payment method</label>
+      <div class="d-flex gap-2 mb-3 flex-wrap">
+        <div><input class="btn-check" type="radio" name="payment_method" id="upi" value="upi" checked>
+          <label class="btn btn-outline-dark" for="upi"><i class="bi bi-phone"></i> UPI</label></div>
+        <div><input class="btn-check" type="radio" name="payment_method" id="card" value="card">
+          <label class="btn btn-outline-dark" for="card"><i class="bi bi-credit-card"></i> Card</label></div>
+        <div><input class="btn-check" type="radio" name="payment_method" id="cod" value="cod">
+          <label class="btn btn-outline-dark" for="cod"><i class="bi bi-cash"></i> Cash on Delivery</label></div>
+      </div>
+
+      <button class="btn btn-warning fw-bold btn-lg"><i class="bi bi-check2-circle"></i> Place order</button>
+    </form>
+  </div>
+</div>
+{% endblock %}
