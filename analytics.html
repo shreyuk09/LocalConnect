@@ -1,0 +1,317 @@
+{% extends "base.html" %}
+{% block title %}{{ shop.name }} · Analytics{% endblock %}
+{% block head %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+<style>
+:root{
+  --an-bg:#eef2f9; --an-panel:rgba(255,255,255,.72); --an-border:rgba(255,255,255,.6);
+  --an-ink:#0f172a; --an-muted:#64748b; --an-shadow:0 10px 30px rgba(2,6,23,.10);
+  --an-grid:#e6ebf4;
+}
+body.an-dark{
+  --an-bg:#070b16; --an-panel:rgba(23,30,48,.66); --an-border:rgba(148,163,184,.16);
+  --an-ink:#e6ecf7; --an-muted:#93a4c2; --an-shadow:0 14px 40px rgba(0,0,0,.5);
+  --an-grid:#22304d;
+}
+.an-wrap{background:
+  radial-gradient(900px 500px at 12% -8%, rgba(37,99,235,.20), transparent 55%),
+  radial-gradient(900px 500px at 95% 0%, rgba(20,184,166,.18), transparent 55%),
+  var(--an-bg);
+  margin:-1rem -9999px 0; padding:1.4rem 9999px 4rem; color:var(--an-ink); transition:.4s;}
+.an-wrap h1,.an-wrap h2,.an-wrap h3,.an-wrap h4,.an-wrap h5,.an-wrap h6{color:var(--an-ink);}
+.glass{background:var(--an-panel); backdrop-filter:blur(14px); -webkit-backdrop-filter:blur(14px);
+  border:1px solid var(--an-border); border-radius:20px; box-shadow:var(--an-shadow);
+  padding:18px; height:100%; transition:transform .18s ease, box-shadow .18s ease;}
+.glass:hover{transform:translateY(-4px); box-shadow:0 18px 42px rgba(37,99,235,.18);}
+.kpi .label{color:var(--an-muted); font-size:.82rem; font-weight:600; text-transform:uppercase; letter-spacing:.04em;}
+.kpi .value{font-size:1.9rem; font-weight:800; line-height:1.1; margin-top:4px;}
+.kpi .ico{width:42px;height:42px;border-radius:13px;display:flex;align-items:center;justify-content:center;
+  font-size:1.25rem;color:#fff;}
+.g-blue{background:linear-gradient(135deg,#2563eb,#3b82f6);}
+.g-teal{background:linear-gradient(135deg,#14b8a6,#0ea5a4);}
+.g-amber{background:linear-gradient(135deg,#f59e0b,#f97316);}
+.g-pink{background:linear-gradient(135deg,#ec4899,#8b5cf6);}
+.g-green{background:linear-gradient(135deg,#16a34a,#22c55e);}
+.g-red{background:linear-gradient(135deg,#ef4444,#f43f5e);}
+.up{color:#16a34a;font-weight:700;} .down{color:#ef4444;font-weight:700;}
+.an-muted{color:var(--an-muted);}
+.live-dot{width:9px;height:9px;border-radius:50%;background:#22c55e;display:inline-block;
+  box-shadow:0 0 0 0 rgba(34,197,94,.6); animation:pulse 1.6s infinite;}
+@keyframes pulse{0%{box-shadow:0 0 0 0 rgba(34,197,94,.6)}70%{box-shadow:0 0 0 10px rgba(34,197,94,0)}100%{box-shadow:0 0 0 0 rgba(34,197,94,0)}}
+.kpi .value{opacity:0; transform:translateY(8px); animation:rise .6s forwards;}
+@keyframes rise{to{opacity:1;transform:none}}
+.an-table{width:100%;font-size:.9rem;} .an-table th{color:var(--an-muted);font-weight:600;text-align:left;padding:6px 8px;}
+.an-table td{padding:6px 8px;border-top:1px solid var(--an-grid);}
+.pill{display:inline-block;background:rgba(37,99,235,.12);color:#2563eb;border-radius:30px;padding:3px 10px;font-size:.78rem;font-weight:600;margin:2px;}
+body.an-dark .pill{background:rgba(59,130,246,.2);color:#93c5fd;}
+.rec{display:flex;gap:12px;padding:10px 0;border-top:1px solid var(--an-grid);}
+.rec .ic{font-size:1.4rem;}
+.chartbox{position:relative;height:280px;}
+.chartbox.sm{height:230px;}
+/* chatbot */
+#botToggle{position:fixed;right:24px;bottom:24px;z-index:1050;width:60px;height:60px;border-radius:50%;border:none;
+  background:linear-gradient(135deg,#2563eb,#14b8a6);color:#fff;font-size:1.5rem;box-shadow:0 10px 24px rgba(37,99,235,.45);cursor:pointer;}
+#botPanel{position:fixed;right:24px;bottom:96px;z-index:1050;width:340px;max-width:92vw;display:none;}
+#botBody{height:280px;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:6px;}
+.msg{padding:8px 12px;border-radius:14px;max-width:85%;font-size:.88rem;}
+.msg.bot{background:rgba(37,99,235,.12);align-self:flex-start;}
+.msg.me{background:linear-gradient(135deg,#2563eb,#14b8a6);color:#fff;align-self:flex-end;}
+@media print{nav,.footer,#botToggle,#botPanel,.no-print{display:none!important;} .an-wrap{margin:0;padding:0;}}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="an-wrap">
+
+  <!-- Header -->
+  <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
+    <div>
+      <h2 class="mb-0"><i class="bi bi-graph-up-arrow"></i> {{ shop.name }} — Analytics</h2>
+      <span class="an-muted">Business intelligence · {{ shop.category }} · ⭐ {{ shop.rating }}</span>
+    </div>
+    <div class="d-flex gap-2 no-print">
+      <button class="btn btn-outline-secondary btn-sm" id="themeBtn"><i class="bi bi-moon-stars"></i> Theme</button>
+      <a class="btn btn-outline-danger btn-sm" href="{{ url_for('export_pdf') }}"><i class="bi bi-filetype-pdf"></i> PDF</a>
+      <a class="btn btn-outline-success btn-sm" href="{{ url_for('export_excel') }}"><i class="bi bi-file-earmark-excel"></i> Excel</a>
+      <button class="btn btn-primary btn-sm" onclick="window.print()"><i class="bi bi-printer"></i> Print</button>
+    </div>
+  </div>
+
+  <!-- REAL-TIME TODAY -->
+  <div class="glass mb-4" style="background:linear-gradient(120deg,rgba(37,99,235,.16),rgba(20,184,166,.14));">
+    <div class="d-flex align-items-center gap-2 mb-2"><span class="live-dot"></span><strong>Live · Today</strong></div>
+    <div class="row text-center g-3">
+      {% set t = d.today %}
+      <div class="col-6 col-md"><div class="value" style="font-size:1.6rem;font-weight:800">{{ t.orders_today }}</div><div class="an-muted small">Orders Today</div></div>
+      <div class="col-6 col-md"><div class="value" style="font-size:1.6rem;font-weight:800">₹{{ t.revenue_today|int }}</div><div class="an-muted small">Revenue Today</div></div>
+      <div class="col-6 col-md"><div class="value" style="font-size:1.6rem;font-weight:800">{{ t.products_sold_today }}</div><div class="an-muted small">Products Sold</div></div>
+      <div class="col-6 col-md"><div class="value" style="font-size:1.6rem;font-weight:800">{{ t.new_customers_today }}</div><div class="an-muted small">Customers Today</div></div>
+      <div class="col-6 col-md"><div class="value" style="font-size:1.6rem;font-weight:800">{{ t.active_deliveries }}</div><div class="an-muted small">Active Deliveries</div></div>
+    </div>
+  </div>
+
+  <!-- REVENUE KPIs -->
+  <h5 class="mb-2">💰 Revenue Analytics</h5>
+  <div class="row g-3 mb-4">
+    {% set r = d.revenue %}
+    {% set rev_cards = [('Daily', r.daily, 'g-blue','bi-calendar-day'),('Weekly', r.weekly,'g-teal','bi-calendar-week'),('Monthly', r.monthly,'g-amber','bi-calendar-month'),('Yearly', r.yearly,'g-pink','bi-calendar3'),('Total', r.total,'g-green','bi-cash-stack')] %}
+    {% for label,val,grad,ic in rev_cards %}
+    <div class="col-6 col-md"><div class="glass kpi">
+      <div class="d-flex justify-content-between"><span class="label">{{ label }}</span><span class="ico {{ grad }}"><i class="bi {{ ic }}"></i></span></div>
+      <div class="value">₹{{ val|int }}</div>
+    </div></div>
+    {% endfor %}
+    <div class="col-6 col-md"><div class="glass kpi">
+      <div class="d-flex justify-content-between"><span class="label">Growth</span><span class="ico {{ 'g-green' if r.growth>=0 else 'g-red' }}"><i class="bi bi-arrow-{{ 'up' if r.growth>=0 else 'down' }}-right"></i></span></div>
+      <div class="value {{ 'up' if r.growth>=0 else 'down' }}">{{ r.growth }}%</div>
+    </div></div>
+  </div>
+
+  <!-- SALES + PROFIT KPIs -->
+  <div class="row g-3 mb-4">
+    {% set s = d.sales %} {% set p = d.profit %}
+    <div class="col-6 col-md-2"><div class="glass kpi"><span class="label">Total Orders</span><div class="value">{{ s.total_orders }}</div></div></div>
+    <div class="col-6 col-md-2"><div class="glass kpi"><span class="label">Completed</span><div class="value up">{{ s.completed }}</div></div></div>
+    <div class="col-6 col-md-2"><div class="glass kpi"><span class="label">Pending</span><div class="value" style="color:#f59e0b">{{ s.pending }}</div></div></div>
+    <div class="col-6 col-md-2"><div class="glass kpi"><span class="label">Cancelled</span><div class="value down">{{ s.cancelled }}</div></div></div>
+    <div class="col-6 col-md-2"><div class="glass kpi"><span class="label">Avg Order Value</span><div class="value">₹{{ s.avg_order_value|int }}</div></div></div>
+    <div class="col-6 col-md-2"><div class="glass kpi"><span class="label">Profit Margin</span><div class="value g-teal" style="-webkit-background-clip:text;background-clip:text;color:#14b8a6">{{ p.margin }}%</div></div></div>
+  </div>
+
+  <!-- CHARTS -->
+  <div class="row g-3 mb-4">
+    <div class="col-lg-7"><div class="glass"><h6>📈 Revenue Trend (30 days)</h6><div class="chartbox"><canvas id="revLine"></canvas></div></div></div>
+    <div class="col-lg-5"><div class="glass"><h6>🥧 Category Sales Distribution</h6><div class="chartbox"><canvas id="catPie"></canvas></div></div></div>
+  </div>
+  <div class="row g-3 mb-4">
+    <div class="col-lg-7"><div class="glass"><h6>📊 Top 10 Most Purchased Products</h6><div class="chartbox"><canvas id="topBar"></canvas></div></div></div>
+    <div class="col-lg-5"><div class="glass"><h6>🍩 Customer Segmentation</h6><div class="chartbox"><canvas id="custDough"></canvas></div></div></div>
+  </div>
+  <div class="row g-3 mb-4">
+    <div class="col-lg-6"><div class="glass"><h6>📉 Sales Growth Over Time</h6><div class="chartbox sm"><canvas id="areaChart"></canvas></div></div></div>
+    <div class="col-lg-6"><div class="glass"><h6>📦 Available Stock vs Sold</h6><div class="chartbox sm"><canvas id="invChart"></canvas></div></div></div>
+  </div>
+  <div class="row g-3 mb-4">
+    <div class="col-lg-6"><div class="glass"><h6>💵 Profit Analysis (by category)</h6><div class="chartbox sm"><canvas id="profitChart"></canvas></div></div></div>
+    <div class="col-lg-6"><div class="glass"><h6>⏰ Purchase Patterns — by hour</h6><div class="chartbox sm"><canvas id="hourChart"></canvas></div></div></div>
+  </div>
+
+  <!-- PROFIT & SAVINGS -->
+  <h5 class="mb-2">🏦 Profit, Savings & Smart-Inventory Analysis</h5>
+  <div class="row g-3 mb-4">
+    <div class="col-md-3"><div class="glass kpi"><span class="label">Total Revenue</span><div class="value">₹{{ p.revenue|int }}</div></div></div>
+    <div class="col-md-3"><div class="glass kpi"><span class="label">Total Profit</span><div class="value up">₹{{ p.profit|int }}</div></div></div>
+    <div class="col-md-3"><div class="glass kpi"><span class="label">Inventory Cost</span><div class="value">₹{{ p.inventory_cost|int }}</div></div></div>
+    <div class="col-md-3"><div class="glass kpi"><span class="label">Inventory Savings</span><div class="value g-teal" style="color:#14b8a6">₹{{ p.inventory_savings|int }}</div></div></div>
+    <div class="col-md-6"><div class="glass"><div class="d-flex justify-content-between"><span class="an-muted">Operational Savings (fewer stockouts / over-orders)</span><strong>₹{{ p.operational_savings|int }}</strong></div></div></div>
+    <div class="col-md-6"><div class="glass"><div class="d-flex justify-content-between"><span class="an-muted">Estimated Waste Reduction</span><strong>₹{{ p.waste_reduction|int }}</strong></div></div></div>
+  </div>
+
+  <!-- AI INSIGHTS + RECOMMENDATIONS -->
+  <div class="row g-3 mb-4">
+    <div class="col-lg-6"><div class="glass">
+      <h6>🤖 AI Demand Insights</h6>
+      {% set di = d.demand %}
+      <div class="mb-2"><span class="an-muted">Most demanded:</span> <strong>{{ di.most_demanded }}</strong></div>
+      <div class="mb-2"><span class="an-muted">Trending:</span> {% for t in di.trending %}<span class="pill">🔥 {{ t }}</span>{% endfor %}</div>
+      <div class="mb-2"><span class="an-muted">Seasonal trend ({{ di.season }}):</span> demand shifting toward seasonal staples.</div>
+      <div class="mb-2"><span class="an-muted">Likely to run out:</span> {% for x in di.likely_to_run_out %}<span class="pill" style="background:rgba(239,68,68,.14);color:#ef4444">⚠ {{ x }}</span>{% endfor %}{% if not di.likely_to_run_out %}<span class="an-muted">none imminent</span>{% endif %}</div>
+      <div><span class="an-muted">Recommended restocking:</span>
+        <table class="an-table mt-1"><tr><th>Product</th><th>Order Qty</th></tr>
+        {% for s2 in di.restock %}<tr><td>{{ s2.product }}</td><td><strong>+{{ s2.recommended_order }}</strong></td></tr>{% endfor %}
+        {% if not di.restock %}<tr><td colspan="2" class="an-muted">Stock healthy 👍</td></tr>{% endif %}
+        </table>
+      </div>
+    </div></div>
+    <div class="col-lg-6"><div class="glass">
+      <h6>💡 AI Business Recommendations</h6>
+      {% for rec in d.recommendations %}
+      <div class="rec"><span class="ic">{{ rec.icon }}</span><div><strong>{{ rec.type }}</strong><div class="an-muted small">{{ rec.text }}</div></div></div>
+      {% endfor %}
+    </div></div>
+  </div>
+
+  <!-- PRODUCT PERFORMANCE + CUSTOMERS -->
+  <div class="row g-3 mb-4">
+    <div class="col-lg-4"><div class="glass">
+      <h6>🏆 Top Selling</h6>
+      <table class="an-table"><tr><th>Product</th><th>Sold</th></tr>
+      {% for r2 in d.performance.top_selling[:6] %}<tr><td>{{ r2.name }}</td><td><strong>{{ r2.sold }}</strong></td></tr>{% endfor %}</table>
+      <h6 class="mt-3">👀 Most Viewed</h6>
+      <table class="an-table">{% for r2 in d.performance.most_viewed[:4] %}<tr><td>{{ r2.name }}</td><td class="an-muted">{{ r2.views }} views</td></tr>{% endfor %}</table>
+    </div></div>
+    <div class="col-lg-4"><div class="glass">
+      <h6>⚡ Fastest Selling</h6>
+      <table class="an-table"><tr><th>Product</th><th>Conv.</th></tr>
+      {% for r2 in d.performance.fastest_selling %}<tr><td>{{ r2.name }}</td><td>{{ r2.conversion }}%</td></tr>{% endfor %}</table>
+      <h6 class="mt-3">🐌 Least Selling / 📉 Low Stock</h6>
+      <table class="an-table">{% for r2 in d.performance.low_stock[:5] %}<tr><td>{{ r2.name }}</td><td style="color:#ef4444">{{ r2.stock }} left</td></tr>{% endfor %}
+      {% if not d.performance.low_stock %}<tr><td class="an-muted">No low-stock items</td></tr>{% endif %}</table>
+    </div></div>
+    <div class="col-lg-4"><div class="glass">
+      <h6>👥 Customer Analytics</h6>
+      {% set c = d.customers %}
+      <div class="row text-center g-2 mb-2">
+        <div class="col"><div class="value" style="font-size:1.4rem;font-weight:800">{{ c.total }}</div><div class="an-muted small">Total</div></div>
+        <div class="col"><div class="value" style="font-size:1.4rem;font-weight:800">{{ c.repeat }}</div><div class="an-muted small">Repeat</div></div>
+        <div class="col"><div class="value" style="font-size:1.4rem;font-weight:800">{{ c.new }}</div><div class="an-muted small">New</div></div>
+      </div>
+      <div class="an-muted small mb-2">Retention rate: <strong>{{ c.retention }}%</strong> · Avg rating ⭐{{ c.avg_rating }} ({{ c.review_count }})</div>
+      <h6 class="mt-2">Recent Reviews</h6>
+      {% for rv in c.reviews[:4] %}
+      <div style="border-top:1px solid var(--an-grid);padding:5px 0"><span style="color:#f59e0b">{% for i in range(rv.rating) %}★{% endfor %}</span>
+        <span class="small">{{ rv.comment }}</span><div class="an-muted small">{{ rv.date }}</div></div>
+      {% endfor %}
+    </div></div>
+  </div>
+
+  <!-- PURCHASE PATTERNS -->
+  <div class="glass mb-4">
+    <h6>🛍️ Customer Purchase Patterns</h6>
+    {% set pt = d.patterns %}
+    <div class="row">
+      <div class="col-md-4">
+        <div class="mb-1"><span class="an-muted">Peak shopping hour:</span> <strong>{{ pt.peak_hour }}</strong></div>
+        <div class="mb-2"><span class="an-muted">Most active day:</span> <strong>{{ pt.peak_day }}</strong></div>
+        <div class="an-muted small">Frequently bought together:</div>
+        {% for a,b,n in pt.frequently_bought_together %}<div class="pill">🧺 {{ a }} + {{ b }} ({{ n }}×)</div>{% endfor %}
+        {% if not pt.frequently_bought_together %}<div class="an-muted small">Not enough co-purchase data yet.</div>{% endif %}
+      </div>
+      <div class="col-md-8"><div class="chartbox sm"><canvas id="dayChart"></canvas></div></div>
+    </div>
+  </div>
+</div>
+
+<!-- CHATBOT -->
+<button id="botToggle" title="Business assistant">🤖</button>
+<div id="botPanel" class="glass">
+  <div class="d-flex justify-content-between align-items-center mb-2"><strong>📊 Business Assistant</strong>
+    <button class="btn-close" onclick="document.getElementById('botPanel').style.display='none'"></button></div>
+  <div id="botBody"><div class="msg bot">Hi! Ask me about <em>revenue, profit, top sellers, low stock, today, peak hours</em>…</div></div>
+  <div class="input-group mt-2"><input id="botInput" class="form-control" placeholder="Ask…">
+    <button class="btn btn-primary" id="botSend">Send</button></div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const CH = {{ d.charts | tojson }};
+const PAT = {{ d.patterns | tojson }};
+
+function gradient(ctx, c1, c2){
+  const g = ctx.createLinearGradient(0,0,0,260); g.addColorStop(0,c1); g.addColorStop(1,c2); return g;
+}
+const PALETTE = ['#2563eb','#14b8a6','#f59e0b','#ec4899','#8b5cf6','#22c55e','#ef4444','#0ea5e9','#f97316','#64748b'];
+Chart.defaults.plugins.legend.labels.boxWidth = 12;
+
+// Revenue line
+new Chart(revLine, {type:'line', data:{labels:CH.revenue_trend.labels,
+  datasets:[{label:'Revenue ₹', data:CH.revenue_trend.data, borderColor:'#2563eb', tension:.35,
+    fill:true, backgroundColor:(c)=>gradient(c.chart.ctx,'rgba(37,99,235,.35)','rgba(37,99,235,0)'), pointRadius:0}]},
+  options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+
+// Category pie
+new Chart(catPie, {type:'pie', data:{labels:CH.category.labels,
+  datasets:[{data:CH.category.data, backgroundColor:PALETTE}]},
+  options:{responsive:true,maintainAspectRatio:false}});
+
+// Top products bar
+new Chart(topBar, {type:'bar', data:{labels:CH.top_products.labels,
+  datasets:[{label:'Units sold', data:CH.top_products.data, backgroundColor:'#14b8a6', borderRadius:6}]},
+  options:{indexAxis:'y',responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+
+// Customer doughnut
+new Chart(custDough, {type:'doughnut', data:{labels:CH.customer_segments.labels,
+  datasets:[{data:CH.customer_segments.data, backgroundColor:['#2563eb','#14b8a6','#f59e0b']}]},
+  options:{responsive:true,maintainAspectRatio:false,cutout:'62%'}});
+
+// Area (sales growth = cumulative revenue)
+let cum=0; const cumData = CH.revenue_trend.data.map(v=>cum+=v);
+new Chart(areaChart, {type:'line', data:{labels:CH.revenue_trend.labels,
+  datasets:[{label:'Cumulative ₹', data:cumData, borderColor:'#8b5cf6', tension:.35, fill:true,
+    backgroundColor:(c)=>gradient(c.chart.ctx,'rgba(139,92,246,.4)','rgba(139,92,246,0)'), pointRadius:0}]},
+  options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+
+// Inventory stock vs sold
+new Chart(invChart, {type:'bar', data:{labels:CH.inventory.labels,
+  datasets:[{label:'In stock', data:CH.inventory.stock, backgroundColor:'#2563eb', borderRadius:5},
+            {label:'Sold', data:CH.inventory.sold, backgroundColor:'#f59e0b', borderRadius:5}]},
+  options:{responsive:true,maintainAspectRatio:false}});
+
+// Profit analysis
+new Chart(profitChart, {type:'bar', data:{labels:CH.profit.labels,
+  datasets:[{label:'Revenue ₹', data:CH.profit.revenue, backgroundColor:'#2563eb', borderRadius:5},
+            {label:'Profit ₹', data:CH.profit.profit, backgroundColor:'#22c55e', borderRadius:5}]},
+  options:{responsive:true,maintainAspectRatio:false}});
+
+// Hour pattern
+new Chart(hourChart, {type:'bar', data:{labels:[...Array(24).keys()].map(h=>h+':00'),
+  datasets:[{label:'Orders', data:PAT.hour_series, backgroundColor:'#14b8a6', borderRadius:4}]},
+  options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+
+// Day pattern
+new Chart(dayChart, {type:'bar', data:{labels:['Mon','Tue','Wed','Thu','Fri','Sat','Sun'],
+  datasets:[{label:'Orders', data:PAT.day_series, backgroundColor:PALETTE, borderRadius:6}]},
+  options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{display:false}}}});
+
+// THEME TOGGLE (persisted)
+const tb = document.getElementById('themeBtn');
+function applyTheme(){ const dark = localStorage.an_dark==='1'; document.body.classList.toggle('an-dark',dark);
+  Chart.defaults.color = dark ? '#cbd5e1' : '#475569';
+  Chart.defaults.borderColor = dark ? 'rgba(148,163,184,.15)' : 'rgba(148,163,184,.25)';
+  for(const id in Chart.instances) Chart.instances[id].update(); }
+tb.onclick = ()=>{ localStorage.an_dark = localStorage.an_dark==='1'?'0':'1'; applyTheme(); };
+applyTheme();
+
+// CHATBOT
+const panel=document.getElementById('botPanel'), body=document.getElementById('botBody'),
+      inp=document.getElementById('botInput');
+document.getElementById('botToggle').onclick=()=>{panel.style.display = panel.style.display==='block'?'none':'block'; inp.focus();};
+function add(t,who){const d=document.createElement('div');d.className='msg '+who;d.innerHTML=t;body.appendChild(d);body.scrollTop=body.scrollHeight;}
+async function send(){const q=inp.value.trim(); if(!q)return; add(q,'me'); inp.value='';
+  const r=await fetch('{{ url_for("shop_assistant") }}',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({message:q})});
+  const j=await r.json(); add(j.reply,'bot');}
+document.getElementById('botSend').onclick=send;
+inp.addEventListener('keydown',e=>{if(e.key==='Enter')send();});
+</script>
+{% endblock %}

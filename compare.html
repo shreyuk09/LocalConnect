@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}Compare — localConnect{% endblock %}
+{% block content %}
+<h3 class="section-title mb-1">Compare “{{ query }}” across shops</h3>
+<p class="text-muted">Ranked by an AI <strong>best-value score</strong> (price 40% · distance 30% · rating 20% · stock 10%).</p>
+
+{% if not results %}
+  <div class="alert alert-info">Search a product first — e.g. <a href="{{ url_for('compare', q='Milk') }}">compare Milk</a>.</div>
+{% else %}
+<div class="card">
+  <div class="table-responsive">
+  <table class="table table-hover align-middle mb-0">
+    <thead class="table-light">
+      <tr>
+        <th>Shop</th><th>Product</th><th>Price</th><th>Stock</th>
+        <th>Distance</th><th>Walk</th><th>Delivery</th><th>Rating</th><th>Score</th><th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in results %}
+      <tr class="{{ 'table-success' if loop.first }}">
+        <td><strong>{{ r.shop_name }}</strong>
+            {% if loop.first %}<span class="badge best-badge ms-1">Best</span>{% endif %}</td>
+        <td>{{ r.product_name }}</td>
+        <td class="fw-bold text-primary">₹{{ r.price|int }}</td>
+        <td>
+          {% if r.status=='out_of_stock' %}<span class="chip red">0</span>
+          {% elif r.status=='low_stock' %}<span class="chip amber">{{ r.stock }}</span>
+          {% else %}<span class="chip green">{{ r.stock }}</span>{% endif %}
+        </td>
+        <td>{{ r.distance_label }}</td>
+        <td>{{ r.walking_time }} min</td>
+        <td>{% if r.delivery_available %}<span class="text-success">{{ r.delivery_time }} min</span>{% else %}<span class="text-muted">—</span>{% endif %}</td>
+        <td><span class="stars">{% for i in range(5) %}<i class="bi bi-star{{ '-fill' if i < r.rating|int else '' }}"></i>{% endfor %}</span></td>
+        <td><div class="progress" style="height:18px;width:70px">
+            <div class="progress-bar bg-success" style="width:{{ (r.score*100)|int }}%">{{ (r.score*100)|int }}</div></div></td>
+        <td><a class="btn btn-sm btn-primary" href="{{ url_for('checkout', inventory_id=r.inventory_id) }}">Order</a></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
