@@ -1,0 +1,169 @@
+{% extends "base.html" %}
+{% block title %}{{ shop.name }} — Shop Dashboard{% endblock %}
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-3">
+  <div>
+    <h3 class="section-title mb-0">{{ shop.name }}
+      {% if shop.verified %}<i class="bi bi-patch-check-fill text-primary"></i>
+      {% else %}<span class="badge text-bg-warning">Pending verification</span>{% endif %}
+    </h3>
+    <small class="text-muted">{{ shop.category }} · ⭐{{ shop.rating }} · {{ shop.address }}</small>
+  </div>
+  <a class="btn btn-primary" href="{{ url_for('shop_analytics') }}">
+    <i class="bi bi-graph-up-arrow"></i> Analytics Dashboard</a>
+</div>
+
+<!-- Analytics -->
+<div class="row g-3 mb-4">
+  <div class="col-md-3"><div class="card stat-card p-3 text-center"><div class="num text-primary">{{ analytics.total_orders }}</div><small class="text-muted">Total Orders</small></div></div>
+  <div class="col-md-3"><div class="card stat-card p-3 text-center"><div class="num text-success">₹{{ analytics.revenue|int }}</div><small class="text-muted">Revenue</small></div></div>
+  <div class="col-md-3"><div class="card stat-card p-3 text-center"><div class="num text-warning">{{ low_stock|length }}</div><small class="text-muted">Low Stock Items</small></div></div>
+  <div class="col-md-3"><div class="card stat-card p-3 text-center"><div class="num text-danger">{{ out_stock|length }}</div><small class="text-muted">Out of Stock</small></div></div>
+</div>
+
+{% if low_stock or out_stock %}
+<div class="alert alert-warning">
+  <i class="bi bi-exclamation-triangle"></i>
+  {% if out_stock %}<strong>{{ out_stock|length }}</strong> product(s) out of stock. {% endif %}
+  {% if low_stock %}<strong>{{ low_stock|length }}</strong> running low (≤5 units).{% endif %}
+</div>
+{% endif %}
+
+<ul class="nav nav-tabs" role="tablist">
+  <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#inv">Inventory</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ord">Orders</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#ai">AI Insights</button></li>
+  <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#rev">Reviews</button></li>
+</ul>
+
+<div class="tab-content card border-top-0 p-3">
+  <!-- Inventory + add product -->
+  <div class="tab-pane fade show active" id="inv">
+    <div class="row">
+      <div class="col-lg-7">
+        <table class="table table-sm align-middle">
+          <thead><tr><th>Product</th><th>Price</th><th>Stock</th><th>Status</th><th>Update</th></tr></thead>
+          <tbody>
+          {% for i in shop.inventory %}
+          <tr>
+            <td>{{ i.product.name }}</td>
+            <td>₹{{ i.price|int }}</td>
+            <td>{{ i.stock }}</td>
+            <td>
+              {% if i.status=='out_of_stock' %}<span class="chip red">Out</span>
+              {% elif i.status=='low_stock' %}<span class="chip amber">Low</span>
+              {% else %}<span class="chip green">OK</span>{% endif %}
+            </td>
+            <td>
+              <form class="d-flex gap-1" method="post" action="{{ url_for('update_stock', inv_id=i.id) }}">
+                <input class="form-control form-control-sm" style="width:70px" type="number" name="stock" value="{{ i.stock }}">
+                <input class="form-control form-control-sm" style="width:80px" type="number" name="price" value="{{ i.price|int }}">
+                <button class="btn btn-sm btn-outline-primary">Save</button>
+              </form>
+            </td>
+          </tr>
+          {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="col-lg-5">
+        <div class="card p-3">
+          <h6>Add a product</h6>
+          <form method="post" action="{{ url_for('add_product') }}">
+            <input class="form-control form-control-sm mb-2" name="name" placeholder="Product name" required>
+            <select class="form-select form-select-sm mb-2" name="category">
+              {% for c in categories %}<option {{ 'selected' if c==shop.category }}>{{ c }}</option>{% endfor %}</select>
+            <div class="d-flex gap-2 mb-2">
+              <input class="form-control form-control-sm" type="number" name="price" placeholder="Price ₹" required>
+              <input class="form-control form-control-sm" type="number" name="stock" placeholder="Stock" required>
+            </div>
+            <input class="form-control form-control-sm mb-2" name="image" placeholder="Image URL (optional)">
+            <button class="btn btn-sm btn-warning w-100 fw-bold">Add product</button>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Orders -->
+  <div class="tab-pane fade" id="ord">
+    {% if not orders %}<p class="text-muted">No orders yet.</p>{% endif %}
+    <table class="table table-sm align-middle">
+      <thead><tr><th>#</th><th>Type</th><th>Items</th><th>Total</th><th>Status</th><th>Actions</th></tr></thead>
+      <tbody>
+      {% for o in orders %}
+      <tr>
+        <td>{{ o.id }}</td>
+        <td>{{ o.order_type }}</td>
+        <td>{% for it in o.items %}{{ it.qty }}×{{ it.product_name }}{% if not loop.last %}, {% endif %}{% endfor %}</td>
+        <td>₹{{ o.total|int }}</td>
+        <td><span class="badge text-bg-secondary">{{ o.status }}</span></td>
+        <td class="d-flex gap-1">
+          {% if o.status == 'placed' %}
+            <form method="post" action="{{ url_for('order_action', order_id=o.id, action='accept') }}"><button class="btn btn-sm btn-success">Accept</button></form>
+            <form method="post" action="{{ url_for('order_action', order_id=o.id, action='reject') }}"><button class="btn btn-sm btn-outline-danger">Reject</button></form>
+          {% elif o.status == 'accepted' and o.order_type=='delivery' %}
+            <form method="post" action="{{ url_for('order_action', order_id=o.id, action='dispatch') }}"><button class="btn btn-sm btn-primary">Dispatch</button></form>
+          {% elif o.status == 'out_for_delivery' %}
+            <form method="post" action="{{ url_for('order_action', order_id=o.id, action='deliver') }}"><button class="btn btn-sm btn-success">Mark delivered</button></form>
+          {% elif o.status == 'accepted' and o.order_type=='reserve' %}
+            <form method="post" action="{{ url_for('order_action', order_id=o.id, action='collect') }}"><button class="btn btn-sm btn-success">Mark collected</button></form>
+          {% else %}<span class="text-muted small">—</span>{% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+
+  <!-- AI Insights -->
+  <div class="tab-pane fade" id="ai">
+    <div class="row g-3">
+      <div class="col-md-6">
+        <div class="card ai-card p-3 h-100">
+          <h6><i class="bi bi-graph-up-arrow text-primary"></i> Demand Forecast <span class="badge text-bg-primary">AI</span></h6>
+          <table class="table table-sm mb-0">
+            <thead><tr><th>Product</th><th>Avg/wk</th><th>Next wk</th><th>Stock</th></tr></thead>
+            <tbody>{% for f in analytics.forecast %}
+              <tr><td>{{ f.product }}</td><td>{{ f.avg_weekly_demand }}</td>
+                  <td class="fw-bold text-primary">{{ f.projected_next_week }}</td><td>{{ f.current_stock }}</td></tr>
+            {% endfor %}</tbody>
+          </table>
+        </div>
+      </div>
+      <div class="col-md-6">
+        <div class="card ai-card p-3 h-100">
+          <h6><i class="bi bi-arrow-repeat text-success"></i> Auto Restock Suggestions <span class="badge text-bg-success">AI</span></h6>
+          {% if not analytics.restock %}<p class="text-muted small mb-0">Stock levels look healthy 👍</p>{% endif %}
+          <ul class="small mb-0">
+            {% for s in analytics.restock %}
+            <li><strong>{{ s.product }}</strong> — order <strong>{{ s.recommended_order }}</strong> units
+              <span class="text-muted">({{ s.current_stock }} left)</span></li>
+            {% endfor %}
+          </ul>
+        </div>
+      </div>
+      <div class="col-12">
+        <div class="card p-3">
+          <h6><i class="bi bi-fire text-danger"></i> Popular products (your shop)</h6>
+          <div class="d-flex flex-wrap gap-2">
+            {% for p in analytics.popular %}<span class="chip">{{ p.name }} · {{ p.sold }} sold</span>{% endfor %}
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Reviews -->
+  <div class="tab-pane fade" id="rev">
+    {% if not analytics.reviews %}<p class="text-muted">No reviews yet.</p>{% endif %}
+    {% for r in analytics.reviews %}
+    <div class="border-bottom py-2">
+      <span class="stars">{% for i in range(5) %}<i class="bi bi-star{{ '-fill' if i < r.rating else '' }}"></i>{% endfor %}</span>
+      <span class="ms-2">{{ r.comment }}</span>
+      <small class="text-muted d-block">{{ r.created_at.strftime('%d %b %Y') }}</small>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+{% endblock %}
