@@ -1,20 +1,18 @@
-"""Hyperlocal Commerce Platform — Flask application entry point.
+"""localConnect — Flask backend + React SPA (single deployable service).
 
-A hyperlocal product-discovery marketplace: customers search for products and
-instantly see nearby shops stocking them, with price, live stock, distance,
-walking time, delivery options and ratings — plus comparison, maps, ordering,
-payment, tracking, shop dashboards, an admin console and AI features.
-
-Run:
+Serves the built React frontend (in ./frontend) at the root and exposes the
+JSON API under /api/*. Run:
     pip install -r requirements.txt
-    python app.py            # seeds the DB on first run, serves on :5000
+    python app.py          # seeds the DB on first run, serves on :5000
+Production:
+    gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
 """
 
 import os
 from functools import wraps
 
-from flask import (Flask, abort, flash, jsonify, redirect, render_template,
-                   request, send_file, url_for)
+from flask import (Flask, abort, jsonify, request, send_file,
+                   send_from_directory)
 from flask_cors import CORS
 from flask_login import (LoginManager, current_user, login_required,
                          login_user, logout_user)
@@ -22,15 +20,15 @@ from flask_login import (LoginManager, current_user, login_required,
 import analytics
 import services
 from config import Config
-from models import (DeliveryPartner, Inventory, Order, OrderItem, Payment,
-                    Product, Review, Shop, User, db)
+from models import (Inventory, Order, OrderItem, Payment, Product, Shop, User, db)
 
-app = Flask(__name__)
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+FRONTEND_DIR = os.path.join(BASE_DIR, "frontend")  # built React SPA
+
+app = Flask(__name__, static_folder=None)
 app.config.from_object(Config)
 
-# --- CORS + cross-site auth cookies (so a separately-hosted React frontend can
-#     call /api/* with credentials). Set CORS_ORIGINS in the deploy env to your
-#     frontend URL(s), comma-separated. ---
+# CORS only matters if the frontend is hosted separately; harmless when merged.
 _origins = [o.strip() for o in os.environ.get(
     "CORS_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",") if o.strip()]
 CORS(app, resources={r"/api/*": {"origins": _origins}}, supports_credentials=True)
@@ -40,8 +38,6 @@ if os.environ.get("CORS_ORIGINS"):  # cross-site cookies need SameSite=None+Secu
 db.init_app(app)
 
 login_manager = LoginManager(app)
-login_manager.login_view = "login"
-login_manager.login_message_category = "warning"
 
 
 @login_manager.user_loader
@@ -49,17 +45,13 @@ def load_user(user_id):
     return db.session.get(User, int(user_id))
 
 
-@app.context_processor
-def inject_globals():
-    return {
-        "maps_key": app.config["GOOGLE_MAPS_API_KEY"],
-        "categories": ["Clothing", "Hardware", "Electronics", "Grocery",
-                       "Footwear", "Stationery", "Sports", "Home Decor"],
-    }
+@login_manager.unauthorized_handler
+def _unauthorized():
+    return jsonify({"error": "Authentication required"}), 401
 
 
 # ---------------------------------------------------------------------------
-# Role guard
+# Helpers
 # ---------------------------------------------------------------------------
 
 def role_required(*roles):
@@ -75,7 +67,7 @@ def role_required(*roles):
 
 
 def current_location():
-    """Resolve the active customer location (cookie/query > profile > default)."""
+    """Resolve the active customer location (query/cookie > profile > default)."""
     try:
         lat = float(request.args.get("lat") or request.cookies.get("lat"))
         lng = float(request.args.get("lng") or request.cookies.get("lng"))
@@ -86,379 +78,39 @@ def current_location():
         return app.config["DEFAULT_LAT"], app.config["DEFAULT_LNG"]
 
 
-# ===========================================================================
-# PUBLIC PAGES + AUTH
-# ===========================================================================
-
-@app.route("/")
-def index():
-    shops = Shop.query.filter_by(verified=True).limit(8).all()
-    popular = services.popular_products(limit=8)
-    return render_template("index.html", shops=shops, popular=popular,
-                           stats={
-                               "shops": Shop.query.count(),
-                               "products": Product.query.count(),
-                               "orders": Order.query.count(),
-                           })
-
-
-@app.route("/register", methods=["GET", "POST"])
-def register():
-    if request.method == "POST":
-        email = request.form["email"].strip().lower()
-        if User.query.filter_by(email=email).first():
-            flash("That email is already registered.", "danger")
-            return redirect(url_for("register"))
-        user = User(
-            name=request.form["name"].strip(),
-            email=email,
-            phone=request.form.get("phone", "").strip(),
-            role=request.form.get("role", "customer"),
-        )
-        user.set_password(request.form["password"])
-        db.session.add(user)
-        db.session.commit()
-        login_user(user)
-        flash("Welcome to localConnect! Your account is ready.", "success")
-        return redirect(url_for("post_login_redirect"))
-    return render_template("register.html")
-
-
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        email = request.form["email"].strip().lower()
-        user = User.query.filter_by(email=email).first()
-        if user and user.check_password(request.form["password"]):
-            login_user(user)
-            return redirect(url_for("post_login_redirect"))
-        flash("Invalid email or password.", "danger")
-    return render_template("login.html")
-
-
-@app.route("/logout")
-@login_required
-def logout():
-    logout_user()
-    return redirect(url_for("index"))
-
-
-@app.route("/go")
-@login_required
-def post_login_redirect():
-    if current_user.role == "admin":
-        return redirect(url_for("admin_dashboard"))
-    if current_user.role == "owner":
-        return redirect(url_for("shop_dashboard"))
-    return redirect(url_for("customer_dashboard"))
-
-
-# ===========================================================================
-# CUSTOMER MODULE
-# ===========================================================================
-
-@app.route("/dashboard")
-@role_required("customer")
-def customer_dashboard():
-    lat, lng = current_location()
-    recs = services.recommend_for_user(current_user.id)
-    popular = services.popular_products(limit=8)
-    # nearby shops decorated with distance
-    shops = []
-    for s in Shop.query.filter_by(verified=True).all():
-        d = services.haversine_km(lat, lng, s.lat, s.lng)
-        shops.append((d, s))
-    shops.sort(key=lambda x: x[0] or 1e9)
-    nearby = [s for _, s in shops[:9]]
-    orders = (Order.query.filter_by(customer_id=current_user.id)
-              .order_by(Order.created_at.desc()).limit(5).all())
-    return render_template("customer/dashboard.html", recs=recs, popular=popular,
-                           nearby=nearby, orders=orders, lat=lat, lng=lng)
-
-
-@app.route("/search")
-def search():
-    """Search Results Page (works for guests too — encourages signup)."""
-    query = request.args.get("q", "").strip()
-    category = request.args.get("category", "All")
-    sort_by = request.args.get("sort", "distance")
-    lat, lng = current_location()
-
-    results = services.search_inventory(query, lat, lng, category)
-    if sort_by == "best":
-        results = services.best_value_score(results)
-    else:
-        results = services.sort_results(results, sort_by)
-
-    return render_template("customer/search.html", results=results, query=query,
-                           category=category, sort_by=sort_by, lat=lat, lng=lng)
-
-
-@app.route("/compare")
-def compare():
-    """Product Comparison Page — same product across shops, side by side."""
-    query = request.args.get("q", "").strip()
-    lat, lng = current_location()
-    results = services.best_value_score(
-        services.search_inventory(query, lat, lng))
-    return render_template("customer/compare.html", results=results,
-                           query=query, lat=lat, lng=lng)
-
-
-@app.route("/map")
-def map_view():
-    """Google Maps Page — all shops + user, with routing/navigation."""
-    lat, lng = current_location()
-    shops = Shop.query.filter_by(verified=True).all()
-    shop_data = [{
-        "id": s.id, "name": s.name, "category": s.category,
-        "lat": s.lat, "lng": s.lng, "rating": round(s.rating or 0, 1),
-        "address": s.address, "delivery": s.delivery_available,
-        "distance": services.humanize_distance(
-            services.haversine_km(lat, lng, s.lat, s.lng)),
-        "maps_url": services.maps_link(s.name, s.address),
-    } for s in shops]
-    return render_template("customer/map.html", shops=shop_data, lat=lat, lng=lng)
-
-
-@app.route("/checkout/<int:inventory_id>", methods=["GET", "POST"])
-@role_required("customer")
-def checkout(inventory_id):
-    inv = db.session.get(Inventory, inventory_id) or abort(404)
-    lat, lng = current_location()
-
-    if request.method == "POST":
-        qty = max(1, int(request.form.get("qty", 1)))
-        order_type = request.form.get("order_type", "reserve")
-        method = request.form.get("payment_method", "cod")
-
-        if qty > inv.stock:
-            flash("Not enough stock available.", "danger")
-            return redirect(url_for("checkout", inventory_id=inventory_id))
-
-        order = Order(
-            customer_id=current_user.id,
-            shop_id=inv.shop_id,
-            order_type=order_type,
-            status="placed",
-            total=round(inv.price * qty, 2),
-            address=request.form.get("address", ""),
-        )
-        db.session.add(order)
-        db.session.flush()
-
-        db.session.add(OrderItem(order_id=order.id, inventory_id=inv.id,
-                                 product_name=inv.product.name,
-                                 qty=qty, price=inv.price))
-
-        # decrement stock / record sale (drives AI popularity)
-        inv.stock = max(0, inv.stock - qty)
-        inv.sold = (inv.sold or 0) + qty
-
-        # payment
-        payment = Payment(order_id=order.id, method=method, amount=order.total,
-                          status="paid" if method != "cod" else "pending",
-                          txn_ref=f"TXN{order.id:06d}")
-        db.session.add(payment)
-
-        # delivery assignment
-        if order_type == "delivery":
-            partner = services.assign_delivery_partner(inv.shop)
-            if partner:
-                order.delivery_partner_id = partner.id
-                order.status = "accepted"
-
-        db.session.commit()
-        flash("Order placed successfully!", "success")
-        return redirect(url_for("track_order", order_id=order.id))
-
-    dist = services.haversine_km(lat, lng, inv.shop.lat, inv.shop.lng)
-    return render_template("customer/checkout.html", inv=inv,
-                           distance=services.humanize_distance(dist),
-                           delivery_time=services.delivery_time_min(dist),
-                           walk_time=services.walking_time_min(dist))
-
-
-@app.route("/orders")
-@role_required("customer")
-def my_orders():
-    orders = (Order.query.filter_by(customer_id=current_user.id)
-              .order_by(Order.created_at.desc()).all())
-    return render_template("customer/orders.html", orders=orders)
-
-
-@app.route("/track/<int:order_id>")
-@role_required("customer", "admin")
-def track_order(order_id):
-    order = db.session.get(Order, order_id) or abort(404)
-    if current_user.role == "customer" and order.customer_id != current_user.id:
-        abort(403)
-    # timeline stages for the tracking UI
-    flow = (["placed", "accepted", "out_for_delivery", "delivered"]
-            if order.order_type == "delivery"
-            else ["placed", "accepted", "collected"])
-    return render_template("customer/track.html", order=order, flow=flow)
-
-
-@app.route("/shop/<int:shop_id>/review", methods=["POST"])
-@role_required("customer")
-def add_review(shop_id):
-    shop = db.session.get(Shop, shop_id) or abort(404)
-    review = Review(shop_id=shop.id, customer_id=current_user.id,
-                    rating=int(request.form.get("rating", 5)),
-                    comment=request.form.get("comment", "").strip())
-    db.session.add(review)
-    db.session.flush()
-    # recompute shop average rating
-    ratings = [r.rating for r in shop.reviews]
-    shop.rating = round(sum(ratings) / len(ratings), 2) if ratings else 4.0
-    db.session.commit()
-    flash("Thanks for your review!", "success")
-    return redirect(request.referrer or url_for("customer_dashboard"))
-
-
-# ===========================================================================
-# SHOP OWNER MODULE
-# ===========================================================================
-
-@app.route("/shop")
-@role_required("owner")
-def shop_dashboard():
-    shop = Shop.query.filter_by(owner_id=current_user.id).first()
-    if not shop:
-        return redirect(url_for("shop_register"))
-
-    orders = (Order.query.filter_by(shop_id=shop.id)
-              .order_by(Order.created_at.desc()).all())
-    revenue = sum(o.total for o in orders if o.status in
-                  ("delivered", "collected", "accepted", "out_for_delivery"))
-    low_stock = [i for i in shop.inventory if i.status == "low_stock"]
-    out_stock = [i for i in shop.inventory if i.status == "out_of_stock"]
-
-    analytics = {
-        "total_orders": len(orders),
-        "revenue": round(revenue, 2),
-        "popular": services.popular_products(limit=5, shop_id=shop.id),
-        "reviews": (Review.query.filter_by(shop_id=shop.id)
-                    .order_by(Review.created_at.desc()).limit(5).all()),
-        "forecast": services.demand_forecast(shop.id)[:5],
-        "restock": services.restock_suggestions(shop.id),
-    }
-    return render_template("shop/dashboard.html", shop=shop, orders=orders,
-                           low_stock=low_stock, out_stock=out_stock,
-                           analytics=analytics)
-
-
-@app.route("/shop/register", methods=["GET", "POST"])
-@role_required("owner")
-def shop_register():
-    if Shop.query.filter_by(owner_id=current_user.id).first():
-        return redirect(url_for("shop_dashboard"))
-    if request.method == "POST":
-        shop = Shop(
-            owner_id=current_user.id,
-            name=request.form["name"].strip(),
-            owner_name=request.form.get("owner_name", current_user.name),
-            mobile=request.form.get("mobile", ""),
-            address=request.form.get("address", ""),
-            lat=float(request.form.get("lat") or app.config["DEFAULT_LAT"]),
-            lng=float(request.form.get("lng") or app.config["DEFAULT_LNG"]),
-            category=request.form.get("category", "Grocery"),
-            delivery_available=request.form.get("delivery_available") == "on",
-            delivery_radius=float(request.form.get("delivery_radius", 3)),
-            parking=request.form.get("parking") == "on",
-            verified=False,
-        )
-        db.session.add(shop)
-        db.session.commit()
-        flash("Shop submitted! It will appear once an admin verifies it.",
-              "success")
-        return redirect(url_for("shop_dashboard"))
-    return render_template("shop/register.html")
-
-
-@app.route("/shop/product/add", methods=["POST"])
-@role_required("owner")
-def add_product():
-    shop = Shop.query.filter_by(owner_id=current_user.id).first() or abort(404)
-    name = request.form["name"].strip()
-    category = request.form.get("category", shop.category)
-    product = (Product.query.filter(Product.name.ilike(name)).first()
-               or Product(name=name, category=category,
-                          image=request.form.get("image", "")))
-    if not product.id:
-        db.session.add(product)
-        db.session.flush()
-    db.session.add(Inventory(shop_id=shop.id, product_id=product.id,
-                             price=float(request.form["price"]),
-                             stock=int(request.form.get("stock", 0))))
-    db.session.commit()
-    flash(f"Added {name} to your inventory.", "success")
-    return redirect(url_for("shop_dashboard"))
-
-
-@app.route("/shop/inventory/<int:inv_id>/update", methods=["POST"])
-@role_required("owner")
-def update_stock(inv_id):
-    inv = db.session.get(Inventory, inv_id) or abort(404)
-    if inv.shop.owner_id != current_user.id:
-        abort(403)
-    inv.stock = int(request.form.get("stock", inv.stock))
-    if request.form.get("price"):
-        inv.price = float(request.form["price"])
-    db.session.commit()
-    flash("Inventory updated.", "success")
-    return redirect(url_for("shop_dashboard"))
-
-
-@app.route("/shop/order/<int:order_id>/<action>", methods=["POST"])
-@role_required("owner")
-def order_action(order_id, action):
-    order = db.session.get(Order, order_id) or abort(404)
-    if order.shop.owner_id != current_user.id:
-        abort(403)
-    transitions = {
-        "accept": "accepted", "reject": "rejected",
-        "dispatch": "out_for_delivery", "deliver": "delivered",
-        "collect": "collected",
-    }
-    if action in transitions:
-        order.status = transitions[action]
-        db.session.commit()
-        flash(f"Order #{order.id} marked {order.status}.", "success")
-    return redirect(url_for("shop_dashboard"))
-
-
-# ---------------------------------------------------------------------------
-# SHOP OWNER · BUSINESS-INTELLIGENCE ANALYTICS DASHBOARD  (owner-only)
-# ---------------------------------------------------------------------------
-
 def _require_my_shop():
+    return Shop.query.filter_by(owner_id=current_user.id).first()
+
+
+def _owner_shop_or_error():
+    if not current_user.is_authenticated:
+        return None, (jsonify({"error": "Not authenticated"}), 401)
+    if current_user.role != "owner":
+        return None, (jsonify({"error": "Shopkeeper account required"}), 403)
     shop = Shop.query.filter_by(owner_id=current_user.id).first()
     if not shop:
-        return None
-    return shop
+        return None, (jsonify({"error": "No shop"}), 404)
+    return shop, None
 
 
-@app.route("/shop/analytics")
-@role_required("owner")
-def shop_analytics():
-    shop = _require_my_shop()
-    if not shop:
-        return redirect(url_for("shop_register"))
-    data = analytics.shop_dashboard_data(shop.id)
-    return render_template("shop/analytics.html", shop=shop, d=data)
+def _my_order_or_error(order_id):
+    if not current_user.is_authenticated:
+        return None, (jsonify({"error": "Not authenticated"}), 401)
+    order = db.session.get(Order, order_id)
+    if not order or order.customer_id != current_user.id:
+        return None, (jsonify({"error": "Order not found"}), 404)
+    return order, None
 
 
-@app.route("/api/shop/assistant", methods=["POST"])
-@role_required("owner")
-def shop_assistant():
-    """Conversational business assistant over the owner's own analytics."""
-    shop = _require_my_shop()
-    if not shop:
-        return jsonify({"reply": "Register your shop first."})
-    msg = (request.json or {}).get("message", "")
-    return jsonify({"reply": _business_answer(shop.id, msg)})
+def _user_json(user):
+    shop = (Shop.query.filter_by(owner_id=user.id).first()
+            if user.role == "owner" else None)
+    return {
+        "id": user.id, "name": user.name, "email": user.email,
+        "phone": user.phone, "role": user.role,
+        "shop_id": shop.id if shop else None,
+        "shop_name": shop.name if shop else None,
+    }
 
 
 def _business_answer(shop_id, msg):
@@ -507,56 +159,32 @@ def _business_answer(shop_id, msg):
             "today's activity, peak hours, orders, or product bundles.")
 
 
-@app.route("/shop/analytics/export.xlsx")
-@role_required("owner")
-def export_excel():
-    shop = _require_my_shop() or abort(404)
-    return _build_excel(shop)
-
-
-@app.route("/shop/analytics/export.pdf")
-@role_required("owner")
-def export_pdf():
-    shop = _require_my_shop() or abort(404)
-    return _build_pdf(shop)
-
-
 def _build_excel(shop):
     import io
     from openpyxl import Workbook
-
     d = analytics.shop_dashboard_data(shop.id)
     wb = Workbook()
-
     ws = wb.active
     ws.title = "Summary"
-    ws.append([f"{shop.name} — Analytics Report"])
-    ws.append([])
+    ws.append([f"{shop.name} — Analytics Report"]); ws.append([])
     ws.append(["Revenue"])
     for k, v in d["revenue"].items():
         ws.append([k.capitalize(), v])
-    ws.append([])
-    ws.append(["Sales"])
+    ws.append([]); ws.append(["Sales"])
     for k, v in d["sales"].items():
         ws.append([k.replace("_", " ").title(), v])
-    ws.append([])
-    ws.append(["Profit & Savings"])
+    ws.append([]); ws.append(["Profit & Savings"])
     for k, v in d["profit"].items():
         ws.append([k.replace("_", " ").title(), v])
-
     ws2 = wb.create_sheet("Top Products")
     ws2.append(["Product", "Category", "Units Sold", "Views", "Stock", "Price"])
     for r in d["performance"]["top_selling"]:
         ws2.append([r["name"], r["category"], r["sold"], r["views"], r["stock"], r["price"]])
-
     ws3 = wb.create_sheet("Restock Suggestions")
     ws3.append(["Product", "Current Stock", "Recommended Order"])
     for s in d["demand"]["restock"]:
         ws3.append([s["product"], s["current_stock"], s["recommended_order"]])
-
-    buf = io.BytesIO()
-    wb.save(buf)
-    buf.seek(0)
+    buf = io.BytesIO(); wb.save(buf); buf.seek(0)
     return send_file(buf, as_attachment=True,
                      download_name=f"{shop.name.replace(' ', '_')}_analytics.xlsx",
                      mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -564,13 +192,11 @@ def _build_excel(shop):
 
 def _build_pdf(shop):
     import io
-
     from reportlab.lib import colors
     from reportlab.lib.pagesizes import A4
     from reportlab.lib.styles import getSampleStyleSheet
     from reportlab.platypus import (Paragraph, SimpleDocTemplate, Spacer, Table,
                                     TableStyle)
-
     d = analytics.shop_dashboard_data(shop.id)
     buf = io.BytesIO()
     doc = SimpleDocTemplate(buf, pagesize=A4)
@@ -586,10 +212,8 @@ def _build_pdf(shop):
             ("GRID", (0, 0), (-1, -1), 0.5, colors.HexColor("#d0d7e2")),
             ("BACKGROUND", (0, 0), (0, -1), colors.HexColor("#eef2ff")),
             ("FONTSIZE", (0, 0), (-1, -1), 10),
-            ("ROWBACKGROUNDS", (1, 0), (1, -1), [colors.white, colors.HexColor("#f7f9fc")]),
-        ]))
-        el.append(t)
-        el.append(Spacer(1, 14))
+            ("ROWBACKGROUNDS", (1, 0), (1, -1), [colors.white, colors.HexColor("#f7f9fc")])]))
+        el.append(t); el.append(Spacer(1, 14))
 
     r, s, p = d["revenue"], d["sales"], d["profit"]
     section("Revenue", [("Today", f"Rs {r['daily']:.0f}"), ("This Week", f"Rs {r['weekly']:.0f}"),
@@ -602,7 +226,6 @@ def _build_pdf(shop):
                                  ("Margin", f"{p['margin']}%"), ("Inventory Cost", f"Rs {p['inventory_cost']:.0f}"),
                                  ("Operational Savings", f"Rs {p['operational_savings']:.0f}"),
                                  ("Waste Reduction", f"Rs {p['waste_reduction']:.0f}")])
-
     el.append(Paragraph("Top Selling Products", styles["Heading2"]))
     rows = [["Product", "Sold", "Stock", "Price"]] + [
         [x["name"], x["sold"], x["stock"], f"Rs {x['price']:.0f}"]
@@ -614,69 +237,14 @@ def _build_pdf(shop):
         ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
         ("FONTSIZE", (0, 0), (-1, -1), 9)]))
     el.append(t)
-
-    doc.build(el)
-    buf.seek(0)
+    doc.build(el); buf.seek(0)
     return send_file(buf, as_attachment=True,
                      download_name=f"{shop.name.replace(' ', '_')}_analytics.pdf",
                      mimetype="application/pdf")
 
 
 # ===========================================================================
-# ADMIN MODULE
-# ===========================================================================
-
-@app.route("/admin")
-@role_required("admin")
-def admin_dashboard():
-    return render_template(
-        "admin/dashboard.html",
-        users=User.query.all(),
-        shops=Shop.query.all(),
-        products=Product.query.all(),
-        orders=Order.query.order_by(Order.created_at.desc()).all(),
-        stats={
-            "users": User.query.count(),
-            "shops": Shop.query.count(),
-            "pending_shops": Shop.query.filter_by(verified=False).count(),
-            "orders": Order.query.count(),
-            "revenue": round(sum(o.total for o in Order.query.all()), 2),
-        },
-    )
-
-
-@app.route("/admin/analytics")
-@role_required("admin")
-def admin_analytics():
-    return render_template("admin/analytics.html", d=analytics.admin_dashboard_data())
-
-
-@app.route("/admin/shop/<int:shop_id>/verify", methods=["POST"])
-@role_required("admin")
-def verify_shop(shop_id):
-    shop = db.session.get(Shop, shop_id) or abort(404)
-    shop.verified = not shop.verified
-    db.session.commit()
-    flash(f"{shop.name} {'verified' if shop.verified else 'unverified'}.",
-          "success")
-    return redirect(url_for("admin_dashboard"))
-
-
-@app.route("/admin/user/<int:user_id>/delete", methods=["POST"])
-@role_required("admin")
-def delete_user(user_id):
-    user = db.session.get(User, user_id) or abort(404)
-    if user.role == "admin":
-        flash("Cannot delete an admin account.", "danger")
-    else:
-        db.session.delete(user)
-        db.session.commit()
-        flash("User removed.", "success")
-    return redirect(url_for("admin_dashboard"))
-
-
-# ===========================================================================
-# JSON API ENDPOINTS (consumed by the frontend JS / maps / search-as-you-type)
+# JSON API
 # ===========================================================================
 
 @app.route("/api/search")
@@ -698,8 +266,7 @@ def api_shops():
     return jsonify([{
         "id": s.id, "name": s.name, "category": s.category,
         "lat": s.lat, "lng": s.lng, "rating": round(s.rating or 0, 1),
-        "delivery": s.delivery_available, "address": s.address,
-        "image": s.image,
+        "delivery": s.delivery_available, "address": s.address, "image": s.image,
         "distance_km": services.haversine_km(lat, lng, s.lat, s.lng),
         "maps_url": services.maps_link(s.name, s.address),
     } for s in shops])
@@ -707,23 +274,18 @@ def api_shops():
 
 @app.route("/api/suggest")
 def api_suggest():
-    """Smart-search autosuggest with typeahead instant results (blended rank)."""
     lat, lng = current_location()
     return jsonify(services.suggest(request.args.get("q", ""), lat, lng))
 
 
 @app.route("/api/home")
 def api_home():
-    """Landing-page payload for the React frontend."""
     return jsonify({
         "popular": services.popular_products(limit=10),
         "categories": ["Clothing", "Hardware", "Electronics", "Grocery",
                        "Footwear", "Stationery", "Sports", "Home Decor"],
-        "stats": {
-            "shops": Shop.query.count(),
-            "products": Product.query.count(),
-            "orders": Order.query.count(),
-        },
+        "stats": {"shops": Shop.query.count(), "products": Product.query.count(),
+                  "orders": Order.query.count()},
     })
 
 
@@ -738,32 +300,34 @@ def api_shop(shop_id):
         "lat": s.lat, "lng": s.lng, "verified": s.verified,
         "distance_km": services.haversine_km(lat, lng, s.lat, s.lng),
         "maps_url": services.maps_link(s.name, s.address),
-        "products": [{
-            "inventory_id": i.id, "name": i.product.name,
-            "category": i.product.category, "image": i.product.image,
-            "price": i.price, "stock": i.stock, "status": i.status,
-        } for i in s.inventory],
+        "products": [{"inventory_id": i.id, "name": i.product.name,
+                      "category": i.product.category, "image": i.product.image,
+                      "price": i.price, "stock": i.stock, "status": i.status}
+                     for i in s.inventory],
     })
 
 
-# ---- JSON auth API (consumed by the React SPA; shares Flask-Login session) --
+@app.route("/api/shop/assistant", methods=["POST"])
+@role_required("owner")
+def shop_assistant():
+    shop = _require_my_shop()
+    if not shop:
+        return jsonify({"reply": "Register your shop first."})
+    return jsonify({"reply": _business_answer(shop.id, (request.json or {}).get("message", ""))})
 
-def _user_json(user):
-    shop = (Shop.query.filter_by(owner_id=user.id).first()
-            if user.role == "owner" else None)
-    return {
-        "id": user.id, "name": user.name, "email": user.email,
-        "phone": user.phone, "role": user.role,
-        "shop_id": shop.id if shop else None,
-        "shop_name": shop.name if shop else None,
-    }
 
+@app.route("/api/shop/<int:shop_id>/forecast")
+@role_required("owner", "admin")
+def api_forecast(shop_id):
+    return jsonify({"forecast": services.demand_forecast(shop_id),
+                    "restock": services.restock_suggestions(shop_id)})
+
+
+# ---- auth ----
 
 @app.route("/api/auth/me")
 def api_me():
-    if current_user.is_authenticated:
-        return jsonify(_user_json(current_user))
-    return jsonify(None)
+    return jsonify(_user_json(current_user) if current_user.is_authenticated else None)
 
 
 @app.route("/api/auth/register", methods=["POST"])
@@ -803,73 +367,30 @@ def api_logout():
     return jsonify({"ok": True})
 
 
-@app.route("/api/my/shop")
-def api_my_shop():
-    """Compact shopkeeper dashboard payload (owner-only)."""
-    if not current_user.is_authenticated:
-        return jsonify({"error": "Not authenticated"}), 401
-    if current_user.role != "owner":
-        return jsonify({"error": "Shopkeeper account required"}), 403
-    shop = Shop.query.filter_by(owner_id=current_user.id).first()
-    if not shop:
-        return jsonify({"shop": None})
-    rev = analytics.revenue_analytics(shop.id)
-    sales = analytics.sales_analytics(shop.id)
-    perf = analytics.product_performance(shop.id)
-    today = analytics.realtime_today(shop.id)
-    return jsonify({
-        "shop": {"id": shop.id, "name": shop.name, "category": shop.category,
-                 "rating": shop.rating, "address": shop.address,
-                 "verified": shop.verified, "delivery": shop.delivery_available},
-        "revenue": rev, "sales": sales, "today": today,
-        "top_selling": perf["top_selling"][:6],
-        "low_stock": perf["low_stock"][:8],
-        "products": [{"name": i.product.name, "price": i.price, "stock": i.stock,
-                      "status": i.status, "image": i.product.image}
-                     for i in shop.inventory],
-    })
-
-
-def _owner_shop_or_error():
-    if not current_user.is_authenticated:
-        return None, (jsonify({"error": "Not authenticated"}), 401)
-    if current_user.role != "owner":
-        return None, (jsonify({"error": "Shopkeeper account required"}), 403)
-    shop = Shop.query.filter_by(owner_id=current_user.id).first()
-    if not shop:
-        return None, (jsonify({"error": "No shop"}), 404)
-    return shop, None
-
+# ---- orders ----
 
 @app.route("/api/order", methods=["POST"])
 def api_create_order():
-    """Place an order from the React storefront — either home DELIVERY or
-    RESERVE & PICKUP (informs the shop in advance so they keep it ready)."""
     if not current_user.is_authenticated:
         return jsonify({"error": "Please log in to order."}), 401
     if current_user.role != "customer":
         return jsonify({"error": "Log in with a customer account to order."}), 403
-
     data = request.get_json(silent=True) or {}
     inv = db.session.get(Inventory, data.get("inventory_id"))
     if not inv:
         return jsonify({"error": "Product not found."}), 404
-
     qty = max(1, int(data.get("qty", 1)))
     if qty > inv.stock:
         return jsonify({"error": f"Only {inv.stock} in stock."}), 400
-
-    mode = data.get("mode", "pickup")          # 'delivery' | 'pickup'
+    mode = data.get("mode", "pickup")
     note = (data.get("note") or "").strip()
     addr = (data.get("address") or "").strip()
     payment = data.get("payment", "cod")
-
     if mode == "delivery":
         order_type, where = "delivery", (addr or "Home delivery")
     else:
         order_type = "reserve"
         where = "In-store pickup" + (f" — {note}" if note else "")
-
     order = Order(customer_id=current_user.id, shop_id=inv.shop_id,
                   order_type=order_type, status="placed",
                   total=round(inv.price * qty, 2), address=where)
@@ -877,20 +398,17 @@ def api_create_order():
     db.session.flush()
     db.session.add(OrderItem(order_id=order.id, inventory_id=inv.id,
                              product_name=inv.product.name, qty=qty, price=inv.price))
-    inv.stock = max(0, inv.stock - qty)        # hold the reserved/ordered units
+    inv.stock = max(0, inv.stock - qty)
     inv.sold = (inv.sold or 0) + qty
     db.session.add(Payment(order_id=order.id, method=payment, amount=order.total,
                            status="paid" if payment != "cod" else "pending",
                            txn_ref=f"TXN{order.id:06d}"))
-
-    pickup_eta = None
     if order_type == "delivery":
         partner = services.assign_delivery_partner(inv.shop)
         if partner:
             order.delivery_partner_id = partner.id
             order.status = "accepted"
     db.session.commit()
-
     return jsonify({
         "id": order.id, "status": order.status, "type": order.order_type,
         "total": order.total, "qty": qty, "product": inv.product.name,
@@ -902,7 +420,6 @@ def api_create_order():
 
 @app.route("/api/order/<int:order_id>/action", methods=["POST"])
 def api_order_action(order_id):
-    """Shopkeeper order status transitions (accept/reject + Kanban moves)."""
     shop, err = _owner_shop_or_error()
     if err:
         return err
@@ -912,9 +429,7 @@ def api_order_action(order_id):
     action = (request.get_json(silent=True) or {}).get("action", "")
     transitions = {
         "accept": "accepted", "reject": "rejected", "pack": "packed",
-        "dispatch": "out_for_delivery", "deliver": "delivered",
-        "collect": "collected",
-        # direct status set (used by Kanban drag-drop)
+        "dispatch": "out_for_delivery", "deliver": "delivered", "collect": "collected",
         "placed": "placed", "accepted": "accepted", "packed": "packed",
         "out_for_delivery": "out_for_delivery", "delivered": "delivered",
     }
@@ -925,19 +440,8 @@ def api_order_action(order_id):
     return jsonify({"id": order.id, "status": order.status})
 
 
-def _my_order_or_error(order_id):
-    if not current_user.is_authenticated:
-        return None, (jsonify({"error": "Not authenticated"}), 401)
-    order = db.session.get(Order, order_id)
-    if not order or order.customer_id != current_user.id:
-        return None, (jsonify({"error": "Order not found"}), 404)
-    return order, None
-
-
 @app.route("/api/my/order/<int:order_id>/cancel", methods=["POST"])
 def api_cancel_order(order_id):
-    """Customer cancels their own order (only if not already fulfilled).
-    Restores the reserved stock back to the shop."""
     order, err = _my_order_or_error(order_id)
     if err:
         return err
@@ -957,11 +461,9 @@ def api_cancel_order(order_id):
 
 @app.route("/api/my/order/<int:order_id>/remove", methods=["POST", "DELETE"])
 def api_remove_order(order_id):
-    """Remove an order from the customer's history (delete the record)."""
     order, err = _my_order_or_error(order_id)
     if err:
         return err
-    # if still active, restore stock before deleting
     if order.status not in ("delivered", "collected", "cancelled", "rejected"):
         for it in order.items:
             inv = db.session.get(Inventory, it.inventory_id) if it.inventory_id else None
@@ -975,28 +477,49 @@ def api_remove_order(order_id):
 
 @app.route("/api/my/orders")
 def api_my_orders_json():
-    """The logged-in customer's own orders (with items + quantities)."""
     if not current_user.is_authenticated:
         return jsonify({"error": "Not authenticated"}), 401
     orders = sorted(current_user.orders,
                     key=lambda o: o.created_at.timestamp() if o.created_at else 0,
                     reverse=True)
     return jsonify([{
-        "id": o.id, "status": o.status, "type": o.order_type,
-        "total": round(o.total, 2),
+        "id": o.id, "status": o.status, "type": o.order_type, "total": round(o.total, 2),
         "shop": o.shop.name if o.shop else "—",
         "shop_maps_url": services.maps_link(o.shop.name, o.shop.address) if o.shop else None,
         "date": (o.created_at.strftime("%d %b %Y, %H:%M") if o.created_at else ""),
         "qty": sum(it.qty for it in o.items),
         "payment": (o.payment.method.upper() if o.payment else None),
-        "items": [{"name": it.product_name, "qty": it.qty,
-                   "price": round(it.price, 2)} for it in o.items],
+        "items": [{"name": it.product_name, "qty": it.qty, "price": round(it.price, 2)}
+                  for it in o.items],
     } for o in orders])
+
+
+@app.route("/api/my/shop")
+def api_my_shop():
+    if not current_user.is_authenticated:
+        return jsonify({"error": "Not authenticated"}), 401
+    if current_user.role != "owner":
+        return jsonify({"error": "Shopkeeper account required"}), 403
+    shop = Shop.query.filter_by(owner_id=current_user.id).first()
+    if not shop:
+        return jsonify({"shop": None})
+    return jsonify({
+        "shop": {"id": shop.id, "name": shop.name, "category": shop.category,
+                 "rating": shop.rating, "address": shop.address,
+                 "verified": shop.verified, "delivery": shop.delivery_available},
+        "revenue": analytics.revenue_analytics(shop.id),
+        "sales": analytics.sales_analytics(shop.id),
+        "today": analytics.realtime_today(shop.id),
+        "top_selling": analytics.product_performance(shop.id)["top_selling"][:6],
+        "low_stock": analytics.product_performance(shop.id)["low_stock"][:8],
+        "products": [{"name": i.product.name, "price": i.price, "stock": i.stock,
+                      "status": i.status, "image": i.product.image}
+                     for i in shop.inventory],
+    })
 
 
 @app.route("/api/my/analytics")
 def api_my_analytics():
-    """Full business-intelligence payload for the React shopkeeper dashboard."""
     shop, err = _owner_shop_or_error()
     if err:
         return err
@@ -1006,11 +529,10 @@ def api_my_analytics():
                     "contact": shop.mobile, "lat": shop.lat, "lng": shop.lng,
                     "maps_url": services.maps_link(shop.name, shop.address),
                     "verified": shop.verified, "delivery": shop.delivery_available}
-
-    # Orders for this shop (what orders they have + quantities)
     orders = sorted(shop.orders,
                     key=lambda o: o.created_at.timestamp() if o.created_at else 0,
                     reverse=True)
+
     def _odist(o):
         if o.customer and o.customer.lat:
             return services.humanize_distance(
@@ -1018,8 +540,7 @@ def api_my_analytics():
         return "—"
 
     data["orders"] = [{
-        "id": o.id, "status": o.status, "type": o.order_type,
-        "total": round(o.total, 2),
+        "id": o.id, "status": o.status, "type": o.order_type, "total": round(o.total, 2),
         "date": (o.created_at.strftime("%d %b %Y, %H:%M") if o.created_at else ""),
         "qty": sum(it.qty for it in o.items),
         "items": [{"name": it.product_name, "qty": it.qty} for it in o.items],
@@ -1029,17 +550,12 @@ def api_my_analytics():
     } for o in orders[:40]]
     data["order_counts"] = analytics.sales_analytics(shop.id)
 
-    # Stock status — in-stock quantities, low stock, out of stock
     in_stock, low_stock, out_stock = [], [], []
     for i in shop.inventory:
         row = {"name": i.product.name, "stock": i.stock, "price": i.price,
                "image": i.product.image}
-        if i.stock <= 0:
-            out_stock.append(row)
-        elif i.stock <= Inventory.LOW_STOCK_THRESHOLD:
-            low_stock.append(row)
-        else:
-            in_stock.append(row)
+        (out_stock if i.stock <= 0 else low_stock if i.stock <= Inventory.LOW_STOCK_THRESHOLD
+         else in_stock).append(row)
     data["stock"] = {
         "in_stock": sorted(in_stock, key=lambda r: -r["stock"]),
         "low_stock": sorted(low_stock, key=lambda r: r["stock"]),
@@ -1054,17 +570,13 @@ def api_my_analytics():
 @app.route("/api/my/export.xlsx")
 def api_my_export_excel():
     shop, err = _owner_shop_or_error()
-    if err:
-        return err
-    return _build_excel(shop)
+    return err if err else _build_excel(shop)
 
 
 @app.route("/api/my/export.pdf")
 def api_my_export_pdf():
     shop, err = _owner_shop_or_error()
-    if err:
-        return err
-    return _build_pdf(shop)
+    return err if err else _build_pdf(shop)
 
 
 @app.route("/api/recommendations")
@@ -1073,35 +585,37 @@ def api_recommendations():
     return jsonify(services.recommend_for_user(current_user.id))
 
 
-@app.route("/api/shop/<int:shop_id>/forecast")
-@role_required("owner", "admin")
-def api_forecast(shop_id):
-    return jsonify({
-        "forecast": services.demand_forecast(shop_id),
-        "restock": services.restock_suggestions(shop_id),
-    })
+# ===========================================================================
+# Serve the built React SPA (everything that isn't /api/*)
+# ===========================================================================
 
-
-@app.errorhandler(403)
-def forbidden(e):
-    return render_template("error.html", code=403,
-                           message="You don't have access to this page."), 403
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def spa(path):
+    if path.startswith("api/") or path.startswith("api"):
+        abort(404)
+    candidate = os.path.join(FRONTEND_DIR, path)
+    if path and os.path.isfile(candidate):
+        return send_from_directory(FRONTEND_DIR, path)
+    return send_from_directory(FRONTEND_DIR, "index.html")
 
 
 @app.errorhandler(404)
 def not_found(e):
-    return render_template("error.html", code=404,
-                           message="Page not found."), 404
+    if request.path.startswith("/api/"):
+        return jsonify({"error": "Not found"}), 404
+    return send_from_directory(FRONTEND_DIR, "index.html")  # SPA client routes
+
+
+@app.errorhandler(403)
+def forbidden(e):
+    return jsonify({"error": "Forbidden"}), 403
 
 
 # ---------------------------------------------------------------------------
 
 def init_db():
-    """Create tables and seed sample data on first run.
-
-    Wrapped defensively so it's safe when several gunicorn workers boot at once
-    (a concurrent seed just rolls back instead of crashing the worker, which
-    would otherwise stop the port from ever opening)."""
+    """Create tables and seed sample data on first run (race-safe for gunicorn)."""
     with app.app_context():
         try:
             db.create_all()
@@ -1109,22 +623,17 @@ def init_db():
                 import seed
                 seed.run(db)
                 print("✓ Database seeded with sample stores, products & users.")
-        except Exception as e:  # another worker is seeding / table race
+        except Exception as e:
             db.session.rollback()
             print(f"⚠ init_db skipped (already initialising?): {e}")
 
 
-# Seed on import too, so production servers (e.g. `gunicorn app:app`) also work,
-# not just `python app.py`. init_db() is idempotent (only seeds an empty DB).
 init_db()
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # Bind to 0.0.0.0 so the host (e.g. Render) can detect the open port.
-    # debug=False in production (the reloader breaks port detection on Render).
     debug = os.environ.get("FLASK_DEBUG", "0") == "1"
     print(f"\n🛒  localConnect running on 0.0.0.0:{port}")
-    print("    Demo logins → admin@localfind.in / owner1@localfind.in / "
-          "customer@localfind.in   (password: password123)\n")
+    print("    Demo logins → owner1@localfind.in / customer@localfind.in   (password: password123)\n")
     app.run(host="0.0.0.0", port=port, debug=debug)
