@@ -1,0 +1,23 @@
+# Render Blueprint for the localConnect Flask backend.
+# In Render: New → Blueprint → point at this repo (root dir: hyperlocal-commerce).
+services:
+  - type: web
+    name: localconnect-api
+    runtime: python
+    pythonVersion: "3.11"
+    rootDir: hyperlocal-commerce
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    # NOTE: this --bind 0.0.0.0:$PORT is what makes Render detect the port.
+    # A bare `gunicorn app:app` binds to 127.0.0.1:8000 and the deploy fails.
+    # --workers 1 avoids SQLite write contention + the seed-on-boot race.
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 120
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      # Set this to your deployed frontend URL(s) to allow logged-in API calls:
+      - key: CORS_ORIGINS
+        value: http://localhost:5173
+      # Optional: use a managed DB instead of ephemeral SQLite
+      # - key: DATABASE_URL
+      #   value: postgresql+psycopg2://user:pass@host/db
